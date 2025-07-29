@@ -1,0 +1,90 @@
+from flask import Flask, request, render_template
+import pandas as pd
+import joblib
+import datetime
+import time
+from prometheus_client import Counter, Histogram, Gauge
+from prometheus_flask_exporter import PrometheusMetrics
+from utils import extract_datetime_features, get_item_descriptions
+import psutil
+import json
+
+# Метрики
+REQUEST_COUNT = Counter("requests_total", "Total number of requests")
+REQUEST_LATENCY = Histogram("custom_request_latency_seconds_my", "Latency of requests")
+MEMORY_USAGE = Gauge("memory_usage_mb", "Memory usage")
+CPU_USAGE = Gauge("cpu_usage_percent", "CPU usage")
+
+# Загрузка модели и данных
+model = joblib.load("logreg_model.pkl")
+properties = pd.read_csv("data/properties_wide_encoded.csv")
+descriptions = pd.read_csv("data/copy_properties_full_long.csv")
+with open("data/feature_names.json") as f:
+    feature_names = json.load(f)
+
+
+app = Flask(__name__)
+metrics = PrometheusMetrics(app, defaults_prefix="flask")
+metrics.register_default(
+    metrics=REQUEST_LATENCY,
+    endpoints=["/metrics"]
+)
+
+
+@app.route("/", methods=["GET", "POST"])
+def index():
+    REQUEST_COUNT.inc()
+
+    # Обновим метрики ресурсов
+    MEMORY_USAGE.set(psutil.virtual_memory().used / 1024**2)
+    CPU_USAGE.set(psutil.cpu_percent())
+
+    start_time = time.time()
+    if request.method == "POST":
+        user_input = request.form.get("user_id")
+        if not user_input or not user_input.isdigit():
+            REQUEST_LATENCY.observe(time.time() - start_time)
+            return render_template("index.html", message="Пожалуйста, введите правильное значение.")
+        if int(user_input) == 0:
+            REQUEST_LATENCY.observe(time.time() - start_time)
+            return render_template("index.html", message="Пожалуйста, введите правильное значение.")
+        else:
+            user_id = int(user_input)
+
+            # Создание признаков
+            now = datetime.datetime.now()
+            fake_day = datetime.datetime(2015, 9, now.day % 30 + 1, now.hour, now.minute)
+            X = extract_datetime_features(fake_day)
+            X["visitorid"] = user_id
+            merged = properties.copy()
+            for col in X.columns:
+                merged[col] = X[col].values[0]
+
+            
+            # Оставляем только те фичи, которые были во время обучения
+            missing = set(feature_names) - set(merged.columns)
+            if missing:
+                raise ValueError(f"Признаки отсутствуют: {missing} \nдолжны быть {feature_names}\n по факту {merged.columns}")
+
+            merged = merged[feature_names]  # упорядочить и оставить нужные
+            
+            if merged.isnull().any().any():
+                raise ValueError(f"Внимание: merged содержит NaN! {merged.isnull().sum()}")
+
+
+            # Предсказание
+            proba = model.predict_proba(merged)[:, 1]
+            preds = pd.DataFrame({"itemid": merged["itemid"], "predict_proba": proba})
+            top_items = preds.sort_values(by="predict_proba", ascending=False).head(3)["itemid"]
+            descriptions_text = get_item_descriptions(top_items, descriptions)
+            message = f'Рекомендации для пользователя <strong>{user_id}</strong>:<br><br>1) {top_items.iloc[0]}<br>2) {top_items.iloc[1]}<br>3) {top_items.iloc[2]}'
+
+            REQUEST_LATENCY.observe(time.time() - start_time)
+            return render_template("index.html", message=message, descriptions=descriptions_text)
+
+    REQUEST_LATENCY.observe(time.time() - start_time)
+    return render_template("index.html", message="Айди больше 0, целое положительное число")
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
+

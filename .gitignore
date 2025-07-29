@@ -1,0 +1,13 @@
+# Исключить графану и данные
+grafana/
+data/
+ml-service.tar
+*.zip
+*.tar
+*.db
+*.png
+*.pdf
+*.csv
+__pycache__/
+.env
+

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Рекомендации</title>
+</head>
+<body>
+    <h1>Добро пожаловать, введите свой айди покупателя для получения рекомендаций</h1>
+    <form method="POST">
+        <input name="user_id" type="text" placeholder="Введите ID">
+        <button type="submit">Получить рекомендации</button>
+    </form>
+    <p>{{ message | safe }}</p>
+    {% if descriptions %}
+    <ul>
+        {% for desc in descriptions %}
+        <li>{{ desc | safe }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+</body>
+</html>
+
